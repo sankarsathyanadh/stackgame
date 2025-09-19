@@ -125,111 +125,124 @@
 
 <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
 <script>
-const { Engine, Render, Runner, World, Bodies, Events, Mouse, MouseConstraint } = Matter;
-const width = window.innerWidth - 150;
-const height = window.innerHeight - 100;
-// const width = 800 , height = 600;
+ const { Engine, Render, Runner, World, Bodies, Events } = Matter;
+
+const canvas  = document.getElementById('gameCanvas');
+const wrapper = document.getElementById('gameWrapper');
+const scoreEl = document.getElementById('score');
+const restart = document.getElementById('restart');
+
 const engine = Engine.create();
 engine.world.gravity.y = 1;
 
+function resize() {
+  canvas.width  = wrapper.clientWidth;
+  canvas.height = wrapper.clientHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
 const render = Render.create({
-  canvas: document.getElementById('gameCanvas'),
+  canvas,
   engine,
-  options: {
-    width,
-    height,
-    wireframes: false,
-    background: '#4174cf'
-  }
+  options: { wireframes:false, background:'#4174cf' }
 });
 Render.run(render);
 Runner.run(Runner.create(), engine);
+
 const world = engine.world;
 
-/* -------- Static boundaries -------- */
+/* ---------- Static walls ---------- */
 const wallColor = '#11182a';
-const platformWidth = width * 0.5;
-const platform = Bodies.rectangle(width/2, height - 20, platformWidth, 20,
-  { isStatic:true, render:{ fillStyle: wallColor }});
-const leftWall  = Bodies.rectangle(-10, height/2, 20, height,
-  { isStatic:true, render:{ fillStyle: wallColor }});
-const rightWall = Bodies.rectangle(width + 10, height/2, 20, height,
-  { isStatic:true, render:{ fillStyle: wallColor }});
-World.add(world, [platform, leftWall, rightWall]);
+let platform, leftWall, rightWall;
+function addWalls(){
+  const w = canvas.width, h = canvas.height;
+  const pw = w*0.60;
+  platform = Bodies.rectangle(w/2, h-20, pw, 20, {isStatic:true, render:{fillStyle:wallColor}});
+  leftWall  = Bodies.rectangle(-10, h/2, 20, h, {isStatic:true, render:{fillStyle:wallColor}});
+  rightWall = Bodies.rectangle(w+10, h/2, 20, h, {isStatic:true, render:{fillStyle:wallColor}});
+  World.add(world,[platform,leftWall,rightWall]);
+}
+addWalls();
 
-/* -------- Score -------- */
+/* ---------- Scoring ---------- */
 let score = 0;
-const scoreEl = document.getElementById('score');
-
-/* -------- Drag-and-drop from palette -------- */
-const canvasRect = render.canvas.getBoundingClientRect();
-const shapes = document.querySelectorAll('.shape');
-
-shapes.forEach(shape => {
-  shape.draggable = true;
-  shape.addEventListener('dragstart', e => {
-    e.dataTransfer.setData('w', shape.offsetWidth);
-    e.dataTransfer.setData('h', shape.offsetHeight);
+Events.on(engine,'collisionStart',e=>{
+  e.pairs.forEach(p=>{
+    const a=p.bodyA,b=p.bodyB;
+    if ((a===platform&&!b.isStatic)||(b===platform&&!a.isStatic)){
+      const box=a===platform?b:a;
+      if(!box.scored){ score++; box.scored=true; scoreEl.textContent=score; }
+    }
+  });
+});
+Events.on(engine,'afterUpdate',()=>{
+  world.bodies.forEach(b=>{
+    if(!b.isStatic && b.position.y>canvas.height+50){
+      if(!b.missed){ score=Math.max(0,score-1); b.missed=true; scoreEl.textContent=score; }
+      World.remove(world,b);
+    }
   });
 });
 
-// Allow drop on canvas
-render.canvas.addEventListener('dragover', e => e.preventDefault());
-render.canvas.addEventListener('drop', e => {
-  e.preventDefault();
-  const w = parseInt(e.dataTransfer.getData('w'));
-  const h = parseInt(e.dataTransfer.getData('h'));
-  const x = e.clientX - canvasRect.left;
-  const y = e.clientY - canvasRect.top;
-  addBox(x, y, w, h);
-});
-
-function addBox(x, y, w, h){
-  const box = Bodies.rectangle(x, y, w, h, {
-    restitution: 0.2,
-    friction: 0.8,
-    density: 0.001,
-    render: { fillStyle: '#374d9d' }
+/* ---------- Create a physics box ---------- */
+function addBox(x,y,w,h){
+  const box = Bodies.rectangle(x,y,w,h,{
+    restitution:0.2,
+    friction:0.8,
+    density:0.001,
+    render:{fillStyle:'#374d9d'}
   });
   World.add(world, box);
 }
 
-/* -------- Scoring rules -------- */
-Events.on(engine, 'collisionStart', event => {
-  event.pairs.forEach(pair => {
-    const { bodyA, bodyB } = pair;
-    if ((bodyA === platform && !bodyB.isStatic) ||
-        (bodyB === platform && !bodyA.isStatic)) {
-      const box = bodyA === platform ? bodyB : bodyA;
-      if (!box.scored) {
-        score++;
-        box.scored = true;
-        scoreEl.textContent = score;
-      }
+/* ---------- Custom drag-and-drop ---------- */
+let dragData = null;
+const shapes = document.querySelectorAll('.shape');
+
+shapes.forEach(shape=>{
+  shape.addEventListener('pointerdown', e=>{
+    e.preventDefault();
+    dragData = {
+      el: shape,
+      w: shape.offsetWidth,
+      h: shape.offsetHeight
+    };
+    shape.setPointerCapture(e.pointerId);
+  });
+
+  shape.addEventListener('pointermove', e=>{
+    if(!dragData) return;
+    shape.style.position='relative';
+    shape.style.zIndex=1000;
+    shape.style.left = (e.clientX - dragData.w/2) + 'px';
+    shape.style.top  = (e.clientY - dragData.h/2) + 'px';
+  });
+
+  shape.addEventListener('pointerup', e=>{
+    if(!dragData) return;
+    const rect = canvas.getBoundingClientRect();
+    if (e.clientX >= rect.left && e.clientX <= rect.right &&
+        e.clientY >= rect.top  && e.clientY <= rect.bottom) {
+      // drop inside canvas
+      addBox(e.clientX - rect.left, e.clientY - rect.top,
+             dragData.w, dragData.h);
     }
+    // reset style
+    dragData.el.style.position='';
+    dragData.el.style.left='';
+    dragData.el.style.top='';
+    dragData = null;
   });
 });
 
-Events.on(engine, 'afterUpdate', () => {
-  world.bodies.forEach(b => {
-    if (!b.isStatic && b.position.y > height + 50) {
-      if (!b.missed) {
-        score = Math.max(0, score - 1);
-        scoreEl.textContent = score;
-        b.missed = true;
-      }
-      World.remove(world, b);
-    }
-  });
-});
-
-/* -------- Restart -------- */
-document.getElementById('restart').onclick = () => {
-  World.clear(world, true);
-  World.add(world, [platform, leftWall, rightWall]);
+/* ---------- Restart ---------- */
+restart.addEventListener('pointerdown',()=>{
+  World.clear(world,true);
   score = 0;
   scoreEl.textContent = score;
-};
+  addWalls();
+});
 </script>
 </body>
 </html>
